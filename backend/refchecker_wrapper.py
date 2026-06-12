@@ -2064,6 +2064,25 @@ class ProgressRefChecker:
                         bibliography_source_kind = 'pdf'
                         set_extraction_method('cache')
                         await maybe_update_title_from_direct_pdf(paper_source)
+                        # A cache hit gives us the bibliography but NOT the
+                        # manuscript body — yet inline citation contexts AND
+                        # AI-text detection both need it. If the PDF was
+                        # downloaded on a prior run it's still on disk, so
+                        # extract the body locally (no network) here. Before this
+                        # fix paper_text stayed empty on every cache hit, so
+                        # _attach_citation_contexts had nothing to scan and the
+                        # references silently lost their "cited in: …" context.
+                        # (The _fetch_body_text_for_ai_detection recovery further
+                        # down is the network fallback for when the PDF is gone.)
+                        try:
+                            cached_pdf = get_cached_artifact_path(self.cache_dir, paper_source, 'paper.pdf')
+                            if cached_pdf and os.path.exists(cached_pdf) and os.path.getsize(cached_pdf) > 0:
+                                paper_text = await asyncio.to_thread(self._extract_pdf_text_scoped, cached_pdf)
+                                if paper_text:
+                                    pdf_path_for_fallback = cached_pdf
+                                    logger.info("Cache hit: recovered %d chars of body text from the cached PDF for citation contexts / AI detection", len(paper_text))
+                        except Exception as _body_e:  # noqa: BLE001
+                            logger.debug("Cache-hit body extraction skipped: %s", _body_e)
 
                     # Handle direct PDF URLs (e.g., Microsoft Research PDFs)
                     else:
@@ -2559,6 +2578,11 @@ class ProgressRefChecker:
                 fetched_body = await self._fetch_body_text_for_ai_detection(paper_source)
                 if fetched_body:
                     paper_text = fetched_body
+                    logger.info("Recovered %d chars of body text for citation contexts (source=%s)", len(fetched_body), extraction_method)
+                else:
+                    # No body text anywhere → contexts/AI detection can't run.
+                    # Make it visible instead of silently dropping every context.
+                    logger.warning("No body text available for citation contexts (source=%s, refs=%d) — inline 'cited in' contexts will be empty for this article", extraction_method, len(references or []))
             _attach_citation_contexts(references, paper_text)
             _ctx_attached = sum(1 for r in (references or []) if r.get("citation_context"))
             logger.info(
@@ -2671,6 +2695,11 @@ class ProgressRefChecker:
                 return no_ref_result
 
             # Step 3: Check references in parallel (like CLI)
+            # total_refs MUST reflect the real, final reference count — this is
+            # the authoritative count the whole progress stream divides by. It
+            # is recomputed from len(references) here (after all extraction /
+            # de-dup / merge passes have run) so processed can never overshoot
+            # an early estimate and push the bar past 100% ("28/23 · 122%").
             total_refs = len(references)
             await self.emit_progress("references_extracted", {
                 "total_refs": total_refs,
@@ -2751,6 +2780,13 @@ class ProgressRefChecker:
             )
 
             # Step 4: Return final results
+            # Reconcile the reported total to the REAL final reference count.
+            # `results` is the verified reference list actually streamed to the
+            # UI; if it ever carries more entries than the early `total_refs`
+            # estimate (de-dup/merge/re-extraction), raise the total so
+            # processed_refs == total_refs and progress lands exactly at 100%
+            # rather than overshooting.
+            final_total_refs = max(total_refs, len(results))
             final_result = {
                 "paper_title": paper_title,
                 "paper_source": paper_source,
@@ -2758,8 +2794,8 @@ class ProgressRefChecker:
                 "bibliography_source_kind": bibliography_source_kind,
                 "references": results,
                 "summary": {
-                    "total_refs": total_refs,
-                    "processed_refs": total_refs,
+                    "total_refs": final_total_refs,
+                    "processed_refs": final_total_refs,
                     "errors_count": errors_count,
                     "warnings_count": warnings_count,
                     "suggestions_count": suggestions_count,
