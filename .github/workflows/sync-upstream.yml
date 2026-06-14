@@ -1,0 +1,85 @@
+name: Sync PR branch with upstream
+
+# Keeps the open upstream PR (markrussinovich/refchecker#52, head =
+# fix/remaining-p0-viewers) free of merge conflicts by merging Mark's main into
+# the branch and auto-resolving the ONLY file that ever conflicts —
+# src/refchecker/__version__.py (three independent release pipelines bump it).
+#
+# Safety:
+#   * Stops itself once PR #52 is no longer OPEN (merged/closed).
+#   * Only merges/pushes when Mark's main actually advanced.
+#   * Auto-resolves ONLY the version file. On ANY other conflict it aborts the
+#     merge and FAILS the run (so a human reviews) — it never force-merges code.
+#
+# Lives on the fork's default branch (required for `schedule`); it is NOT part
+# of the PR to Mark.
+
+on:
+  schedule:
+    - cron: '0 7 * * *'        # daily 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: sync-upstream-pr-branch
+  cancel-in-progress: false
+
+env:
+  PR_BRANCH: fix/remaining-p0-viewers
+  UPSTREAM_PR: '52'
+  UPSTREAM_REPO: markrussinovich/refchecker
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Is the upstream PR still open?
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          state=$(gh pr view "$UPSTREAM_PR" --repo "$UPSTREAM_REPO" --json state -q .state 2>/dev/null || echo UNKNOWN)
+          echo "Upstream PR #$UPSTREAM_PR state: $state"
+          if [ "$state" = "OPEN" ]; then echo "open=true" >> "$GITHUB_OUTPUT"; else echo "open=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Checkout PR branch
+        if: steps.pr.outputs.open == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: fix/remaining-p0-viewers
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Merge upstream/main (auto-resolve version only)
+        if: steps.pr.outputs.open == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Branch already contains upstream/main — nothing to sync."
+            exit 0
+          fi
+          if git merge --no-edit upstream/main; then
+            echo "Merged upstream/main cleanly."
+          else
+            conflicts="$(git diff --name-only --diff-filter=U || true)"
+            if [ "$conflicts" = "src/refchecker/__version__.py" ]; then
+              git checkout --ours src/refchecker/__version__.py
+              git add src/refchecker/__version__.py
+              git commit --no-edit
+              echo "Auto-resolved src/refchecker/__version__.py (kept the fork's version)."
+            else
+              echo "::error::Non-version merge conflict — needs a human. Conflicting files:"
+              echo "$conflicts"
+              git merge --abort
+              exit 1
+            fi
+          fi
+          git push origin "HEAD:${PR_BRANCH}"
+          echo "Pushed the synced branch — PR #$UPSTREAM_PR is up to date with upstream."
