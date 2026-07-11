@@ -83,6 +83,7 @@ section to expand it.
 - **Native-feeling document viewer.** The extracted body renders as a centered, serif **"page"** with flagged passages highlighted in place, plus **zoom** and an in-document **find** bar (⌘F, match navigation).
 - **PDF page viewer with zoom.** Browse the original PDF pages full-screen with +/- zoom and fit.
 - **Reference-manager export (RIS).** Imports straight into **Zotero**, **EndNote**, **Mendeley**, **Rayyan**, **Papers**, and **RefWorks** — with the verifier's *corrected* metadata, not the wrong-as-cited values. Includes a *Sort* control (citation order / alphabetical / year).
+- **Send to Zotero (one-click).** If **Zotero** is running on the same machine, the *Export* menu forwards the whole bibliography straight into your library — same *corrected* metadata, mapped to proper Zotero item types (journal / conference / preprint). No Zotero running (or a remote deployment)? It falls back to a `.ris` download automatically, so the click is never wasted.
 
 </details>
 
@@ -140,6 +141,7 @@ RefChecker verifies citations against **Semantic Scholar**, **OpenAlex**, **Cros
 
 <br>
 
+- **v0.9.23** — **Send to Zotero (one-click).** The *Export* menu gains a **Send to Zotero** action: with Zotero open on the same machine it forwards the whole bibliography into your library in one click — mapped to proper item types (journal / conference / preprint), carrying the verifier's **corrected** metadata (never the wrong as-cited values). When Zotero isn't reachable it **falls back to a `.ris` download** automatically. *(Also fixes a latent bug where the RIS export silently dropped the `arXiv:` accession line.)*
 - **v0.9.22** — **Article-tools layout + "sometimes missing" fixes.** The four on-demand article tools (**Retractions · Gap-finder · Citation-numbering · Chat & Summarize**) now sit in a tidy **2×2 button grid**; clicking one opens its details **full-width directly below** (one at a time — the buttons never shift). **Fix: the native document viewer no longer comes up empty** for pasted text / `.bib` / `.bbl` sources (the extracted text is now served). **Fix: inline "cited in…" contexts no longer silently vanish** on a re-check — when references load from cache the manuscript body is re-read so citation contexts (and AI detection) have text to work with. Settings: the **Accounts & Teams** label is left-aligned and the panel header shows the full name. *(The "Citation numbering — n/a · mixed citation styles" message is honest abstention, not a bug: flagging a genuinely mixed-style paper would be a false alarm.)*
 - **v0.9.21** — **Progress + chips.** **Fix: the reference progress can no longer read past 100%** (`28/23 · 122%`, `59/43`) — `total_refs` is reconciled to the real reference count across the backend and the UI, so the bar always lands at 100%. The **"Filter by issue" chips** are aligned to the button design-system (one 8px radius, colour-only hover/selected, proper toggle semantics). *(Release builds are now pinned via a committed `Cargo.lock` so a drifting Rust dependency can't break a desktop build.)*
 - **v0.9.20** — **Reliability + polish.** **Fix (P0): checks no longer get stuck `in_progress` forever** — a reconciler finalizes orphaned checks (e.g. after a restart or a hung detection) on startup *and* on demand, and AI detection is now hard-bounded so it always returns. **AI-generated-text result no longer gets trapped** behind a stuck finalization. The **Share card/video counts now match the results bar exactly** (errors are no longer double-counted with hallucinations). **Author matching** handles Brazilian/Iberian names where the cited surname is a middle compound (`de Oliveira SD` ↔ `Danilo de Oliveira Silva`). Each reference gets a **Funding** button (opens the funder/grant data, like Abstract). The walkthrough **video shows only in the Share popup** (not the stats summary), and the **accounts/sign-in text is left-aligned**.
@@ -241,7 +243,7 @@ LLM extraction is generally more accurate, but PDFs can fall back to GROBID when
 | **Reports** | JSON, JSONL, CSV, or text — with error details, corrections, and hallucination assessments |
 | **Corrections** | Auto-generates corrected BibTeX, plain-text, and bibitem entries for each error |
 | **Visual analysis** | **3D reference-library graph** (Obsidian-style), real per-paper **citation graph**, and a **native-feeling document viewer** with zoom + in-document find |
-| **Share & export** | **Self-contained HTML report**, **publish-to-web link** (GitHub Gist), an **animated video** walkthrough, and **RIS** export for Zotero / EndNote / Mendeley |
+| **Share & export** | **Self-contained HTML report**, **publish-to-web link** (GitHub Gist), an **animated video** walkthrough, **RIS** export for Zotero / EndNote / Mendeley, and **one-click Send to Zotero** (with `.ris` fallback) |
 | **Web UI** | Real-time progress, history sidebar, batch tracking, split extraction/hallucination LLM settings, export (Markdown/text/BibTeX), dark mode |
 | **Multi-user hosting** | OAuth sign-in (Google, GitHub, Microsoft), per-user rate limiting, admin controls |
 
@@ -279,6 +281,7 @@ Legend: ✅ available · — not applicable to that surface · 🌐 needs a host
 | Similar papers + "Cites & Refs" + common-works view | ✅ | ✅ | — | — | Interactive UI surface |
 | Per-reference chat (full-text grounded, TL;DR fallback) + Summarize | ✅ | ✅ | — | — | Separate model selection per feature |
 | Share / export (HTML · Markdown · PDF · DOCX · RIS · video) | ✅ | ✅ | — | — | Interactive share surface; CLI uses `--report-file`/`--report-format` |
+| Send to Zotero (one-click, local connector) | ✅ | ✅ | — | — | Forwards corrected refs to a local Zotero; `.ris` download fallback when Zotero isn't running |
 | Author / journal hover cards (h-index · ORCID · guidelines) | ✅ | ✅ | — | — | Interactive UI surface |
 | Live token / $ telemetry per LLM flow (R47) | ✅ | ✅ | — | ✅ (per-request usage) | UI meter is web/desktop; usage is returned by the API |
 | Accounts · Teams · realtime shared-batch presence (R26/R27) | 🌐 | 🌐 | — | 🌐 | Opt-in multi-user mode; see [Multi-User Server](#multi-user-server-oauth) |
