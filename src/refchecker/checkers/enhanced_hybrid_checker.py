@@ -345,12 +345,22 @@ class EnhancedHybridReferenceChecker:
             for api_name in attempted_apis
             if api_name not in failed_api_names
         ]
+        # Transient infra failures (timeouts, throttling/429, 5xx, a request
+        # that simply failed to complete) are NOT evidence that a reference is
+        # unverifiable — a checker was momentarily unreachable. Excluding them
+        # keeps a genuine "not found" honest instead of blaming, e.g., a
+        # transient DBLP outage, which read to users as a citation problem.
+        transient_failures = {'throttled', 'timeout', 'server_error'}
+        genuine_failures = [
+            failed_api for failed_api in failed_apis
+            if failed_api.get('failure_type', 'other') not in transient_failures
+        ]
         failure_details = [
             failed_api.get('failure_detail') or self._format_failure_detail(
                 failed_api['name'],
                 failed_api.get('failure_type', 'other'),
             )
-            for failed_api in failed_apis
+            for failed_api in genuine_failures
         ]
 
         if negative_attempts and failure_details:
@@ -362,6 +372,10 @@ class EnhancedHybridReferenceChecker:
             return f"Paper not found by any checker; no match in {', '.join(negative_attempts)}"
         if failure_details:
             return f"All available checkers failed: {'; '.join(failure_details)}"
+        # Only transient failures and no genuine negative results: don't
+        # fabricate a "not found" verdict — report a soft, retryable state.
+        if failed_apis:
+            return 'Could not verify right now: temporary checker issues — please retry'
         return 'Paper not found by any checker'
     
     def _try_api(self, api_name: str, api_instance: Any, reference: Dict[str, Any], is_retry: bool = False) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], Optional[str], bool, str, str]:

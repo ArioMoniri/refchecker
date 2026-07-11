@@ -608,16 +608,24 @@ const ReferenceCard = memo(function ReferenceCard({ reference, index, displayInd
       ? [{ type: 'verified_url', url: reference.cited_url }]
       : []
 
+  // Normalize a warning so the render block (which reads error_type/
+  // error_details) also handles warnings that only carry the warning_type/
+  // warning_details keys. The fuzzy-verification-cache path emits warnings in
+  // that shape; un-normalized they rendered as a meaningless "Unknown
+  // mismatch" even though they carry a real type + message.
+  const normalizeWarningKeys = (w) => (
+    (w && w.warning_type && !w.error_type)
+      ? { ...w, error_type: w.warning_type, error_details: w.error_details || w.warning_details || '' }
+      : w
+  )
   const recheckWarnings = (reference.errors || [])
     .filter(issue => issue.warning_type && !issue.error_type)
-    .map(issue => ({
-      ...issue,
-      error_type: issue.warning_type,
-      error_details: issue.warning_details || '',
-    }))
+    .map(normalizeWarningKeys)
   const baseDisplayWarnings = foundMetadataMatchesCitation
     ? []
-    : (recheckWarnings.length > 0 ? recheckWarnings : (reference.warnings || []))
+    : (recheckWarnings.length > 0
+        ? recheckWarnings
+        : (reference.warnings || []).map(normalizeWarningKeys))
   // Style-aware venue suppression. When the active citation style
   // permits NLM-style abbreviated journal titles AND the cited venue
   // is a known abbreviation of the database venue, the venue warning

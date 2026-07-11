@@ -234,7 +234,11 @@ class LLMProviderMixin:
             "1. Split by numbered markers [1], [2], etc. OR by author-year entries - references may span multiple lines\n"
             "2. Extract: authors, title, venue (journal/booktitle), year, URLs/DOIs\n"
             "3. For BibTeX: 'title' field = paper title, 'journal'/'booktitle' = venue\n"
-            "4. Handle author formats: 'Last, First' becomes 'First Last', separate with *\n"
+            "4. Handle author formats: 'Last, First' becomes 'First Last', separate with *. "
+            "Preserve author names EXACTLY as written — NEVER expand or invent an initial into a "
+            "full given name. Keep Vancouver-style 'Surname INITIALS' verbatim (e.g. 'Morgan KA' "
+            "stays 'Morgan KA', 'Porto JR' stays 'Porto JR'). Do NOT guess a first name from an "
+            "initial letter.\n"
             "5. Faithfully include all authors - do not inject 'et al' if not present, but preserve it if it is\n"
             "6. Faithfully preserve 'et al' and variants like 'et al.' exactly as written as a separate author\n"
             "7. Skip entries that are only URLs without bibliographic data\n"
@@ -265,7 +269,13 @@ class LLMProviderMixin:
             "Mathematical Association of America. American invitational mathematics examination (AIME).\n"
             "Mathematics Competition Series. https://maa.org/math-competitions/aime\n"
             "Output:\n"
-            "Mathematical Association of America#American invitational mathematics examination (AIME)#Mathematics Competition Series#n.d.#https://maa.org/math-competitions/aime"
+            "Mathematical Association of America#American invitational mathematics examination (AIME)#Mathematics Competition Series#n.d.#https://maa.org/math-competitions/aime\n\n"
+            "Input:\n"
+            "Porto JR, Morgan KA, Hecht CJ, Burkhart RJ, Liu RW. Quantifying the scope of\n"
+            "artificial intelligence-assisted writing in orthopaedic medical literature.\n"
+            "J Am Acad Orthop Surg. 2025.\n"
+            "Output:\n"
+            "Porto JR*Morgan KA*Hecht CJ*Burkhart RJ*Liu RW#Quantifying the scope of artificial intelligence-assisted writing in orthopaedic medical literature#J Am Acad Orthop Surg#2025"
         )
 
     def _create_extraction_prompt(self, bibliography_text: str) -> str:

@@ -202,10 +202,13 @@ def test_unverified_reason_includes_negative_and_failed_checkers(_mock_sleep):
     assert url is None
     assert len(errors) == 1
     assert errors[0]['error_type'] == 'unverified'
+    # A CrossRef *timeout* is a transient infra failure, not evidence the
+    # reference is unverifiable, so it is NOT surfaced in the finding. The
+    # honest not-found is driven by the genuine negative (Semantic Scholar).
     assert errors[0]['error_details'] == (
-        'Paper not found by any checker; no match in Semantic Scholar; '
-        'checker failures: CrossRef: simulated timeout'
+        'Paper not found by any checker; no match in Semantic Scholar'
     )
+    assert 'simulated timeout' not in errors[0]['error_details']
     assert errors[0]['sources_checked'] == 2
     assert errors[0]['sources_negative'] == 1
 

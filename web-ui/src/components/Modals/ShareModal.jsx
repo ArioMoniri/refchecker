@@ -132,9 +132,16 @@ export default function ShareModal({ checkId, batchId, title, onClose }) {
       // export so its counts + citation-health match the badge / report card.
       // Batch exports aggregate many checks server-side, so they keep the
       // server computation.
+      // Single-check: also hand over the style-filtered per-reference issues so
+      // the downloaded report shows exactly what the app shows (no cosmetic /
+      // style-suppressed false positives re-surfacing only in the file).
+      const filteredRefs = (summary.refs || []).map((r) => ({
+        errors: r && Array.isArray(r.errors) ? r.errors : [],
+        warnings: r && Array.isArray(r.warnings) ? r.warnings : [],
+      }))
       const req = isBatch
         ? exportBatchFile(batchId, opts)
-        : exportCheckFile(checkId, { ...opts, summary: summary.canonical })
+        : exportCheckFile(checkId, { ...opts, summary: summary.canonical, filteredRefs })
       const [res] = await Promise.all([req, minShow])
       const ext = FORMATS.find((f) => f.id === fmt)?.ext || 'html'
       downloadBlob(res.data, `${safeName(title || (isBatch ? 'batch-report' : 'report'))}.${ext}`)

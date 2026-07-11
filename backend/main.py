@@ -3115,6 +3115,32 @@ def _parse_summary_param(summary: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
 
 
+async def _build_check_export_response(check: dict, check_id: int, *, fmt: str,
+                                       corrections: bool, include: Optional[str], download: bool,
+                                       canonical_summary: Any,
+                                       filtered_refs: Optional[List[Dict[str, Any]]]) -> Response:
+    """Shared render path for the GET + POST single-check export.
+
+    When *filtered_refs* is supplied (POST), the check's per-reference
+    errors/warnings are overridden with the FE's already style-filtered issues
+    so the exported report shows exactly what the app shows — cosmetic /
+    style-suppressed false positives no longer re-surface only in the download.
+    """
+    from backend import export as _export
+    check = _export.apply_filtered_issues(check, filtered_refs)
+    try:
+        content, media_type, ext = _export.render_export(
+            check, fmt, corrections=corrections, include=include,
+            summary=canonical_summary)
+    except _export.PdfEngineUnavailableError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    title = check.get("paper_title") or check.get("custom_label") or f"refchecker-{check_id}"
+    headers = {}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{_export_filename(title, check_id, ext)}"'
+    return Response(content=content, media_type=media_type, headers=headers)
+
+
 @app.get("/api/export/{check_id}/file")
 async def export_check_file(check_id: int, fmt: str = "html", corrections: bool = False,
                             include: Optional[str] = None, download: bool = True,
@@ -3131,25 +3157,20 @@ async def export_check_file(check_id: int, fmt: str = "html", corrections: bool 
                        buildReferenceSummary so the exported counts + citation
                        health match the in-app Summary badge / report card
                        exactly; falls back to server-side counts when absent.
+
+    The POST variant of this route additionally accepts the FE's style-filtered
+    per-reference issues in its body (they don't fit a query string for large
+    bibliographies) so the exported issue LIST also matches the app.
     """
     try:
         # Team-aware read (R26): a team member can export a shared check, matching
         # the batch export path and the shared-check detail view (renders only the
         # already-shared references/verdicts).
         check = await _get_accessible_check_or_404(check_id, current_user)
-        from backend import export as _export
         canonical_summary = _parse_summary_param(summary)
-        try:
-            content, media_type, ext = _export.render_export(
-                check, fmt, corrections=corrections, include=include,
-                summary=canonical_summary)
-        except _export.PdfEngineUnavailableError as e:
-            raise HTTPException(status_code=501, detail=str(e))
-        title = check.get("paper_title") or check.get("custom_label") or f"refchecker-{check_id}"
-        headers = {}
-        if download:
-            headers["Content-Disposition"] = f'attachment; filename="{_export_filename(title, check_id, ext)}"'
-        return Response(content=content, media_type=media_type, headers=headers)
+        return await _build_check_export_response(
+            check, check_id, fmt=fmt, corrections=corrections, include=include,
+            download=download, canonical_summary=canonical_summary, filtered_refs=None)
     except HTTPException:
         raise
     except Exception as e:
@@ -3157,6 +3178,36 @@ async def export_check_file(check_id: int, fmt: str = "html", corrections: bool 
         # and return a stable, generic detail with the format that failed.
         logger.error(f"Error exporting check {check_id} as {fmt}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Could not export this check as {fmt}.")
+
+
+class _ExportFileRequest(BaseModel):
+    fmt: str = "html"
+    corrections: bool = False
+    include: Optional[str] = None
+    download: bool = True
+    summary: Optional[Dict[str, Any]] = None
+    # Per-reference style-filtered issues, aligned positionally to the stored
+    # results, so the report renders the same findings the user sees in-app.
+    filtered_refs: Optional[List[Dict[str, Any]]] = None
+
+
+@app.post("/api/export/{check_id}/file")
+async def export_check_file_post(check_id: int, req: _ExportFileRequest,
+                                 current_user: UserInfo = Depends(require_user)):
+    """POST variant of the single-check export. Same output as the GET route,
+    plus it honors the FE's ``filtered_refs`` (style-filtered per-reference
+    errors/warnings) so the downloaded report never shows cosmetic /
+    style-suppressed issues that the app already hid."""
+    try:
+        check = await _get_accessible_check_or_404(check_id, current_user)
+        return await _build_check_export_response(
+            check, check_id, fmt=req.fmt, corrections=req.corrections, include=req.include,
+            download=req.download, canonical_summary=req.summary, filtered_refs=req.filtered_refs)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting check {check_id} as {req.fmt}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Could not export this check as {req.fmt}.")
 
 
 @app.get("/api/export/batch/{batch_id}/file")

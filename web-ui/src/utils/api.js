@@ -261,8 +261,34 @@ const _exportParams = ({ fmt = 'html', corrections = false, include, summary } =
   }
   return p.toString()
 }
-export const exportCheckFile = (checkId, opts = {}) =>
-  api.get(`/export/${checkId}/file?${_exportParams(opts)}`, { responseType: 'blob', timeout: 60000 })
+export const exportCheckFile = (checkId, opts = {}) => {
+  const { filteredRefs, ...rest } = opts
+  // When the FE has style-filtered per-reference issues, POST them in the body
+  // (they can't fit a query string for a large bibliography) so the exported
+  // report shows exactly what the app shows. Fall back to the GET route if the
+  // POST isn't available (older bundled backend) — the download still works,
+  // just without the per-issue filtering.
+  if (Array.isArray(filteredRefs) && filteredRefs.length) {
+    const { fmt = 'html', corrections = false, include, download = true, summary } = rest
+    const body = {
+      fmt,
+      corrections,
+      include: Array.isArray(include) && include.length ? include.join(',') : undefined,
+      download,
+      summary: summary && typeof summary === 'object' ? summary : undefined,
+      filtered_refs: filteredRefs,
+    }
+    return api.post(`/export/${checkId}/file`, body, { responseType: 'blob', timeout: 60000 })
+      .catch((e) => {
+        const st = e?.response?.status
+        if (st === 404 || st === 405) {
+          return api.get(`/export/${checkId}/file?${_exportParams(rest)}`, { responseType: 'blob', timeout: 60000 })
+        }
+        throw e
+      })
+  }
+  return api.get(`/export/${checkId}/file?${_exportParams(rest)}`, { responseType: 'blob', timeout: 60000 })
+}
 export const exportBatchFile = (batchId, opts = {}) =>
   api.get(`/export/batch/${batchId}/file?${_exportParams(opts)}`, { responseType: 'blob', timeout: 120000 })
 export const publishCheck = (checkId, { adapter = 'github_gist', token = '', public: isPublic = false } = {}) =>

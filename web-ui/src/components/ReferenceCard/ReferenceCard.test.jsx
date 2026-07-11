@@ -46,6 +46,30 @@ describe('ReferenceCard', () => {
     expect(screen.getByText(/Could not verify: Unknown Paper/)).toBeTruthy()
   })
 
+  it('renders a fuzzy-cache warning (warning_type/warning_details keys) with its real message, not "Unknown mismatch"', () => {
+    // The fuzzy-verification-cache path emits warnings keyed warning_type /
+    // warning_details (not error_type/error_details). Un-normalized they used to
+    // render as a meaningless "Unknown mismatch". They must show their message.
+    const reference = {
+      status: 'warning',
+      title: 'A cached paper',
+      authors: ['Jane Smith'],
+      errors: [],
+      warnings: [{
+        warning_type: 'authors',
+        warning_details: 'Author list disagrees with the cached verification of this paper',
+        cited_value: 'Jane Smith',
+        actual_value: 'Jane A. Smith',
+      }],
+      suggestions: [],
+    }
+
+    render(<ReferenceCard reference={reference} index={0} isCheckComplete />)
+
+    expect(screen.queryByText(/Unknown mismatch/i)).toBeNull()
+    expect(screen.getByText(/Author list disagrees with the cached verification/)).toBeTruthy()
+  })
+
   it('renders LLM-found matching metadata without crashing', () => {
     const reference = {
       status: 'hallucination',

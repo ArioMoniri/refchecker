@@ -1670,6 +1670,43 @@ def parse_sections(include: Optional[str]) -> Set[str]:
     return sel or set(ALL_SECTIONS)
 
 
+def apply_filtered_issues(check: Dict[str, Any],
+                          filtered_refs: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """Return a copy of *check* whose per-reference ``errors``/``warnings`` are
+    replaced by the frontend's already style-filtered issue lists.
+
+    The in-app view suppresses cosmetic / style-conforming false positives
+    (author-initial equivalence, NLM venue abbreviations, content-free
+    warnings) via ``filterIssuesForStyle`` before rendering. The exported
+    report used to re-derive its issue lines from the raw stored errors, so
+    those suppressed issues re-surfaced in the download but not the UI. When the
+    client sends its filtered issues we render from THOSE, so the report matches
+    the app exactly. Positional alignment with the stored results; if the shape
+    doesn't line up (batch/history/server-only export with no client filter) the
+    original check is returned unchanged.
+    """
+    if not isinstance(filtered_refs, list) or not filtered_refs:
+        return check
+    uses_results = bool(_as_list(check.get("results")))
+    refs = _as_list(check.get("results")) or _as_list(check.get("references"))
+    if len(filtered_refs) != len(refs):
+        return check  # shape drift — don't risk mis-aligning issues to refs
+    new_refs: List[Any] = []
+    for ref, fr in zip(refs, filtered_refs):
+        if not isinstance(ref, dict) or not isinstance(fr, dict):
+            new_refs.append(ref)
+            continue
+        nr = dict(ref)
+        if isinstance(fr.get("errors"), list):
+            nr["errors"] = fr["errors"]
+        if isinstance(fr.get("warnings"), list):
+            nr["warnings"] = fr["warnings"]
+        new_refs.append(nr)
+    new_check = dict(check)
+    new_check["results" if uses_results else "references"] = new_refs
+    return new_check
+
+
 def render_export(check: Dict[str, Any], fmt: str, *, corrections: bool = False,
                   include: Optional[str] = None, summary: Any = None) -> Tuple[Any, str, str]:
     """Return (content, media_type, ext) for a single check in the given format.
