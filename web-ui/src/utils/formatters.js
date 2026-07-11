@@ -1686,7 +1686,10 @@ export function exportReferenceAsRIS(ref, index = 0) {
   if (corrected.year) lines.push(`PY  - ${corrected.year}`)
   if (corrected.venue) lines.push(type === 'JOUR' ? `JO  - ${corrected.venue}` : `T2  - ${corrected.venue}`)
   if (corrected.doi) lines.push(`DO  - ${corrected.doi}`)
-  if (corrected.arxiv_id) lines.push(`AN  - arXiv:${corrected.arxiv_id}`)
+  // getCorrectedReferenceData exposes the arXiv id as `arxivId` (camelCase);
+  // the earlier snake_case check never fired, so the AN line was silently
+  // dropped from every RIS record. Emit it from the correct field.
+  if (corrected.arxivId) lines.push(`AN  - arXiv:${corrected.arxivId}`)
   const url = _preferredCitationUrl(corrected)
   if (url) lines.push(`UR  - ${url}`)
   // ID is what Rayyan/EndNote use for de-dup; index is a fine fallback
@@ -1698,6 +1701,125 @@ export function exportReferenceAsRIS(ref, index = 0) {
 export function exportResultsAsRIS({ references }) {
   if (!references || references.length === 0) return ''
   return references.map((r, i) => exportReferenceAsRIS(r, i)).join('\n\n') + '\n'
+}
+
+// ── Zotero item JSON ("Send to Zotero") ───────────────────────────────
+// Maps a reference to the item shape the Zotero connector's /saveItems
+// endpoint accepts (same schema as the Zotero Web API / translator output).
+// We reuse getCorrectedReferenceData so ONLY the verifier-corrected metadata
+// is ever sent to Zotero — never the raw as-cited (possibly wrong) values —
+// exactly like the RIS/BibTeX exports. The mapped items are handed to the
+// backend relay (backend/zotero.py), which POSTs them to a locally-running
+// Zotero; when Zotero isn't reachable the caller falls back to an RIS download.
+
+// RIS type (JOUR/CPAPER/THES/BOOK/GEN) → Zotero itemType.
+function _zoteroItemType(risType) {
+  switch (risType) {
+    case 'CPAPER': return 'conferencePaper'
+    case 'THES': return 'thesis'
+    case 'BOOK': return 'book'
+    case 'GEN': return 'preprint'
+    default: return 'journalArticle'
+  }
+}
+
+// The base field an itemType uses to hold the "venue". Types with no natural
+// venue field return null (the value is then dropped rather than mis-filed).
+function _zoteroVenueField(itemType) {
+  switch (itemType) {
+    case 'journalArticle': return 'publicationTitle'
+    case 'conferencePaper': return 'proceedingsTitle'
+    case 'preprint': return 'repository'
+    default: return null
+  }
+}
+
+// Split one author string into a Zotero creator. Handles "Last, First",
+// "First Last", and single-token / organisation names (single-field mode).
+function _zoteroCreator(name) {
+  const s = String(name == null ? '' : name).trim()
+  if (!s) return null
+  if (s.includes(',')) {
+    const [last, ...rest] = s.split(',')
+    const first = rest.join(',').trim()
+    if (first) return { creatorType: 'author', firstName: first, lastName: last.trim() }
+    // "Doe" only, or a trailing comma — single-field name.
+    return { creatorType: 'author', lastName: last.trim(), fieldMode: 1 }
+  }
+  const parts = s.split(/\s+/).filter(Boolean)
+  if (parts.length === 1) {
+    // Mononym / organisation — single-field so Zotero doesn't invent a
+    // first name from it.
+    return { creatorType: 'author', lastName: parts[0], fieldMode: 1 }
+  }
+  return {
+    creatorType: 'author',
+    firstName: parts.slice(0, -1).join(' '),
+    lastName: parts[parts.length - 1],
+  }
+}
+
+/**
+ * Map a single reference to a Zotero item object (connector /saveItems shape).
+ * Uses corrected metadata only. Returns null for an empty reference.
+ */
+export function mapReferenceToZoteroItem(ref) {
+  const corrected = getCorrectedReferenceData(ref)
+  const itemType = _zoteroItemType(_risTypeFor(corrected))
+  const item = { itemType }
+
+  if (corrected.title) item.title = corrected.title
+
+  const creators = _risAuthorList(corrected.authors)
+    .map(_zoteroCreator)
+    .filter(Boolean)
+  if (creators.length) item.creators = creators
+
+  if (corrected.year) item.date = String(corrected.year)
+
+  const venueField = _zoteroVenueField(itemType)
+  if (corrected.venue && venueField) item[venueField] = corrected.venue
+
+  const url = _preferredCitationUrl(corrected)
+  if (url) item.url = url
+
+  // DOI has a first-class field on article/conference/preprint types; on the
+  // rest fold it into Extra so it isn't lost.
+  const hasDoiField = itemType === 'journalArticle' || itemType === 'conferencePaper' || itemType === 'preprint'
+  const extra = []
+  if (corrected.doi) {
+    if (hasDoiField) item.DOI = corrected.doi
+    else extra.push(`DOI: ${corrected.doi}`)
+  }
+  if (corrected.arxivId) {
+    const arx = String(corrected.arxivId).replace(/^arxiv:/i, '').trim()
+    if (itemType === 'preprint') {
+      if (!item.repository) item.repository = 'arXiv'
+      item.archiveID = `arXiv:${arx}`
+    } else {
+      extra.push(`arXiv: ${arx}`)
+    }
+  }
+  // Drop references with no identifying content — a bare item is noise in the
+  // user's library and there's nothing to look up.
+  if (!item.title && !item.creators && !item.DOI && !item.url && !item.archiveID) {
+    return null
+  }
+
+  // Provenance tag — neutral (does NOT claim every item was verified), lets
+  // the user find RefChecker-added items later.
+  extra.push('Imported via RefChecker')
+  item.extra = extra.join('\n')
+
+  return item
+}
+
+/**
+ * Map a list of references to Zotero items, dropping empties.
+ */
+export function referencesToZoteroItems(references) {
+  if (!Array.isArray(references)) return []
+  return references.map(mapReferenceToZoteroItem).filter(Boolean)
 }
 
 // ── Sort modes for any "export the bibliography" path ─────────────────

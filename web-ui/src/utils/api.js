@@ -271,6 +271,12 @@ export const publishCheck = (checkId, { adapter = 'github_gist', token = '', pub
 export const getCheckHealth = (checkId) => api.get(`/check/${checkId}/health`, { timeout: 15000 })
 export const getCheckRetractions = (checkId) => api.get(`/check/${checkId}/retractions`, { timeout: 45000 })
 export const getCheckGaps = (checkId) => api.get(`/check/${checkId}/gaps`, { timeout: 60000 })
+// "Send to Zotero" — items are pre-mapped client-side (formatters
+// .referencesToZoteroItems); the backend relays them to a locally-running
+// Zotero. Resolves with {ok, sent, connector_available, detail}; the caller
+// falls back to an RIS download when connector_available is false/null.
+export const sendReferencesToZotero = (items) =>
+  api.post('/zotero/send', { items }, { timeout: 30000 })
 export const getCitationIntegrity = (checkId) => api.get(`/check/${checkId}/citation-integrity`, { timeout: 60000 })
 // Grounded Chat-with-PDF + Summarize (EPIC-D). Answers ONLY from the article's
 // own text; abstains honestly when the article does not state something. The

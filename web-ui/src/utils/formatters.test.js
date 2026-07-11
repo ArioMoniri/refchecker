@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatDate, formatAuthors, truncate, formatFileSize, getStatusColors, formatReference, displayReferenceValue, exportReferenceAsBibtex, normalizeAuthors, isEtAlSentinel, hasEtAlSentinel } from './formatters'
+import { formatDate, formatAuthors, truncate, formatFileSize, getStatusColors, formatReference, displayReferenceValue, exportReferenceAsBibtex, normalizeAuthors, isEtAlSentinel, hasEtAlSentinel, mapReferenceToZoteroItem, referencesToZoteroItems, exportReferenceAsRIS } from './formatters'
 
 describe('formatters', () => {
   describe('formatDate', () => {
@@ -260,6 +260,108 @@ describe('formatters', () => {
     it('is false for empty / null input', () => {
       expect(hasEtAlSentinel(null)).toBe(false)
       expect(hasEtAlSentinel([])).toBe(false)
+    })
+  })
+
+  // "Send to Zotero" — the mapper reuses getCorrectedReferenceData, so ONLY
+  // verifier-corrected metadata reaches the item (same honesty guardrail as
+  // the RIS / BibTeX exports).
+  describe('mapReferenceToZoteroItem', () => {
+    it('maps a journal article with split creators, venue, DOI and url', () => {
+      const ref = {
+        title: 'A study of things',
+        authors: ['Jane A. Smith', 'John Doe'],
+        year: 2021,
+        venue: 'Nature',
+        doi: '10.1234/abcd',
+      }
+      const item = mapReferenceToZoteroItem(ref)
+      expect(item.itemType).toBe('journalArticle')
+      expect(item.title).toBe('A study of things')
+      expect(item.creators).toEqual([
+        { creatorType: 'author', firstName: 'Jane A.', lastName: 'Smith' },
+        { creatorType: 'author', firstName: 'John', lastName: 'Doe' },
+      ])
+      expect(item.date).toBe('2021')
+      expect(item.publicationTitle).toBe('Nature')
+      expect(item.DOI).toBe('10.1234/abcd')
+      // DOI drives the preferred citation url.
+      expect(item.url).toBe('https://doi.org/10.1234/abcd')
+      expect(item.extra).toContain('Imported via RefChecker')
+    })
+
+    it('sends verifier-corrected values, never the wrong as-cited ones', () => {
+      const ref = {
+        title: 'Old wrong title',
+        authors: ['Doe J'],
+        doi: '10.0000/wrong.cited',
+        errors: [
+          { error_type: 'title', actual_value: 'Correct title' },
+          { error_type: 'doi', actual_value: 'https://doi.org/10.1234/correct' },
+        ],
+      }
+      const item = mapReferenceToZoteroItem(ref)
+      expect(item.title).toBe('Correct title')
+      expect(item.DOI).toBe('10.1234/correct')
+      expect(JSON.stringify(item)).not.toContain('10.0000/wrong.cited')
+      expect(JSON.stringify(item)).not.toContain('Old wrong title')
+    })
+
+    it('maps an arXiv reference as a preprint with repository + archiveID', () => {
+      const ref = { title: 'A preprint', authors: ['Ann Onymous'], arxiv_id: '2101.00001', venue: 'arXiv' }
+      const item = mapReferenceToZoteroItem(ref)
+      expect(item.itemType).toBe('preprint')
+      expect(item.repository).toBe('arXiv')
+      expect(item.archiveID).toBe('arXiv:2101.00001')
+      expect(item.url).toBe('https://arxiv.org/abs/2101.00001')
+    })
+
+    it('maps a conference paper venue into proceedingsTitle', () => {
+      const ref = { title: 'Conf paper', authors: ['A B'], venue: 'Proceedings of NeurIPS' }
+      const item = mapReferenceToZoteroItem(ref)
+      expect(item.itemType).toBe('conferencePaper')
+      expect(item.proceedingsTitle).toBe('Proceedings of NeurIPS')
+    })
+
+    it('treats "Last, First" and single-token / org names correctly', () => {
+      const ref = { title: 'T', authors: ['Smith, Jane', 'OpenAI'] }
+      const item = mapReferenceToZoteroItem(ref)
+      expect(item.creators).toEqual([
+        { creatorType: 'author', firstName: 'Jane', lastName: 'Smith' },
+        { creatorType: 'author', lastName: 'OpenAI', fieldMode: 1 },
+      ])
+    })
+
+    it('returns null for a reference with no identifying content', () => {
+      expect(mapReferenceToZoteroItem({})).toBeNull()
+      expect(mapReferenceToZoteroItem({ authors: [] })).toBeNull()
+    })
+  })
+
+  describe('referencesToZoteroItems', () => {
+    it('maps a list and drops empty references', () => {
+      const items = referencesToZoteroItems([
+        { title: 'One', authors: ['A B'] },
+        {},
+        { title: 'Two', doi: '10.1/x' },
+      ])
+      expect(items).toHaveLength(2)
+      expect(items[0].title).toBe('One')
+      expect(items[1].title).toBe('Two')
+    })
+
+    it('returns [] for non-array input', () => {
+      expect(referencesToZoteroItems(null)).toEqual([])
+      expect(referencesToZoteroItems(undefined)).toEqual([])
+    })
+  })
+
+  // Regression: getCorrectedReferenceData exposes arXiv as `arxivId`; the RIS
+  // AN line used to read `arxiv_id` and silently never emit.
+  describe('exportReferenceAsRIS — arXiv accession', () => {
+    it('emits the AN arXiv line from the corrected arxiv id', () => {
+      const ris = exportReferenceAsRIS({ title: 'P', authors: ['A B'], arxiv_id: '2101.00001' }, 0)
+      expect(ris).toContain('AN  - arXiv:2101.00001')
     })
   })
 })

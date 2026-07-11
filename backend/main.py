@@ -3044,6 +3044,37 @@ async def get_check_gaps(check_id: int, current_user: UserInfo = Depends(require
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class _ZoteroSendRequest(BaseModel):
+    # Zotero item objects already mapped client-side (formatters
+    # .referencesToZoteroItems), which uses the corrected-metadata path so only
+    # verifier-fixed values are ever forwarded — never the raw as-cited ones.
+    items: List[Dict[str, Any]]
+
+
+@app.post("/api/zotero/send")
+async def send_to_zotero(req: _ZoteroSendRequest, current_user: UserInfo = Depends(require_user)):
+    """Forward already-mapped Zotero items to a Zotero desktop app running on
+    THIS machine's loopback connector. The browser can't read the connector's
+    cross-origin response, so the POST happens server-side here.
+
+    Returns ``{ok, sent, connector_available, detail}``. When
+    ``connector_available`` is False/None (Zotero closed, or a remote
+    deployment) the frontend falls back to an RIS download — so a missing
+    Zotero is a normal 200 result, not an error."""
+    from backend import zotero as _zotero
+    try:
+        return await _zotero.send_items(req.items)
+    except Exception as e:
+        logger.error(f"send_to_zotero failed: {e}", exc_info=True)
+        # Non-fatal: signal the FE to use the RIS fallback rather than 500.
+        return {
+            "ok": False,
+            "sent": 0,
+            "connector_available": None,
+            "detail": "Send to Zotero failed — download the .ris file instead.",
+        }
+
+
 @app.get("/api/check/{check_id}/badge.svg")
 async def get_check_badge(check_id: int, current_user: UserInfo = Depends(require_user)):
     """A self-contained citation-health SVG badge (embeddable in reports/READMEs)."""

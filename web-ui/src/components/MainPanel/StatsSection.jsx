@@ -8,6 +8,7 @@ import {
   exportResultsAsJsonl,
   exportResultsAsCsv,
   exportResultsAsRIS,
+  referencesToZoteroItems,
   exportDiffAsMarkdown,
   exportDiffAsCsv,
   sortReferencesForExport,
@@ -16,6 +17,7 @@ import {
   downloadAsFile
 } from '../../utils/formatters'
 import { buildReferenceSummary } from '../../utils/referenceStatus'
+import { sendReferencesToZotero } from '../../utils/api'
 
 /**
  * Per-stage extraction breakdown chip — Regex / LLM / Hallucination LLM.
@@ -96,6 +98,9 @@ export default function StatsSection({ stats, isComplete, references, paperTitle
   // 'diff' = side-by-side original-vs-corrected listing
   const [exportMode, setExportMode] = useState('original')
   const exportMenuRef = useRef(null)
+  // "Send to Zotero" transient status: { tone: 'busy'|'ok'|'info'|'error', msg }
+  const [zoteroStatus, setZoteroStatus] = useState(null)
+  const zoteroTimerRef = useRef(null)
 
   // Close export menu when clicking outside
   useEffect(() => {
@@ -106,6 +111,11 @@ export default function StatsSection({ stats, isComplete, references, paperTitle
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Clear any pending "Send to Zotero" status timer on unmount.
+  useEffect(() => () => {
+    if (zoteroTimerRef.current) clearTimeout(zoteroTimerRef.current)
   }, [])
 
   // All filter types including verified
@@ -293,6 +303,57 @@ export default function StatsSection({ stats, isComplete, references, paperTitle
     }
   }
 
+  // Flash a transient status message next to the Export control. `sticky`
+  // (errors) stays until the next action; everything else auto-clears.
+  const flashZotero = (tone, msg, { sticky = false } = {}) => {
+    if (zoteroTimerRef.current) clearTimeout(zoteroTimerRef.current)
+    setZoteroStatus({ tone, msg })
+    if (!sticky) {
+      zoteroTimerRef.current = setTimeout(() => setZoteroStatus(null), 6000)
+    }
+  }
+
+  // Download the current selection as RIS — the universal reference-manager
+  // import path and the fallback when a live Zotero isn't reachable.
+  const downloadRisFallback = () => {
+    const sortedRefs = sortReferencesForExport(references, sortMode)
+    downloadAsFile(exportResultsAsRIS({ references: sortedRefs }), `${baseFilename}.ris`,
+      'application/x-research-info-systems')
+  }
+
+  // "Send to Zotero": map the current references to Zotero items (corrected
+  // metadata only) and hand them to the backend relay, which POSTs them to a
+  // Zotero running on this machine. If Zotero isn't reachable (closed, or a
+  // remote deployment) we quietly fall back to an RIS download.
+  const handleSendToZotero = async () => {
+    setShowExportMenu(false)
+    if (!isComplete) return
+    const sortedRefs = sortReferencesForExport(references, sortMode)
+    const items = referencesToZoteroItems(sortedRefs)
+    if (items.length === 0) {
+      flashZotero('info', 'No references to send.')
+      return
+    }
+    flashZotero('busy', `Sending ${items.length} to Zotero…`, { sticky: true })
+    try {
+      const { data } = await sendReferencesToZotero(items)
+      if (data?.ok) {
+        flashZotero('ok', data.detail || `Sent ${items.length} to Zotero.`)
+      } else if (data?.connector_available === false) {
+        // Zotero not running here — RIS keeps the click useful.
+        downloadRisFallback()
+        flashZotero('info', 'Zotero not detected — downloaded .ris to import instead.')
+      } else {
+        downloadRisFallback()
+        flashZotero('error', `${data?.detail || 'Zotero save failed'} — downloaded .ris instead.`, { sticky: true })
+      }
+    } catch {
+      // Endpoint missing (older backend) or network error → RIS fallback.
+      downloadRisFallback()
+      flashZotero('info', 'Couldn’t reach Zotero — downloaded .ris to import instead.')
+    }
+  }
+
   return (
     <div 
       className="rounded-lg border p-3"
@@ -348,6 +409,31 @@ export default function StatsSection({ stats, isComplete, references, paperTitle
                 <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
+          )}
+          {/* Transient "Send to Zotero" status (success / fallback / error). */}
+          {zoteroStatus && (
+            <span
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium max-w-[18rem] truncate"
+              style={{
+                backgroundColor: zoteroStatus.tone === 'error' ? 'var(--color-error-bg)'
+                  : zoteroStatus.tone === 'ok' ? 'var(--color-success-bg)'
+                  : 'var(--color-bg-tertiary)',
+                color: zoteroStatus.tone === 'error' ? 'var(--color-error)'
+                  : zoteroStatus.tone === 'ok' ? 'var(--color-success)'
+                  : 'var(--color-text-primary)',
+                border: '1px solid var(--color-border)',
+              }}
+              title={zoteroStatus.msg}
+              role="status"
+            >
+              {zoteroStatus.tone === 'busy' && (
+                <svg className="w-3 h-3 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeOpacity="0.3" />
+                  <path d="M21 12a9 9 0 00-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              )}
+              <span className="truncate">{zoteroStatus.msg}</span>
+            </span>
           )}
           {/* Export dropdown - only enabled when check is complete */}
           <div className="relative" ref={exportMenuRef}>
@@ -446,6 +532,14 @@ export default function StatsSection({ stats, isComplete, references, paperTitle
                   title="Imports directly into Zotero, EndNote, Mendeley, Rayyan, Papers, RefWorks"
                 >
                   🔖 RIS (.ris) — Zotero / EndNote / Rayyan
+                </button>
+                <button
+                  onClick={handleSendToZotero}
+                  className="w-full px-3 py-1.5 text-xs text-left transition-colors cursor-pointer hover:bg-[var(--color-bg-tertiary)]"
+                  style={{ color: 'var(--color-text-primary)' }}
+                  title="One-click add to a Zotero app running on this computer (corrected metadata only). Downloads .ris if Zotero isn't running."
+                >
+                  🦓 Send to Zotero (one-click)
                 </button>
                 <button
                   onClick={() => handleExport('jsonl')}
